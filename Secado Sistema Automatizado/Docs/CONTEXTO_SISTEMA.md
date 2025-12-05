@@ -1158,5 +1158,6 @@ ID_tachada,planta,secadora,Variedad,fecha_inicio,fecha_fin,duracion_hs,TEMPERATU
 
 ---
 
-**Última actualización:** Enero 2025  
+**Última actualización:** Diciembre 2025  
 **Versión del sistema:** 4.0 (ETL + ML + Compilador Histórico + Reportes - Arquitectura completa automatizada)
+
