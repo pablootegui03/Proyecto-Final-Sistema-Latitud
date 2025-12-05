@@ -1,0 +1,512 @@
+// ============================================================
+// CONSTANTES - CONFIGURAR SEGÚN TU ENTORNO
+// ============================================================
+
+// URLs de las Azure Functions
+const URL_AZURE_FUNCTION_1 = 'https://[TU_DOMINIO].azurewebsites.net/api/[ENDPOINT_1]?code=[TU_CODE_1]';
+const URL_AZURE_FUNCTION_2 = 'https://[TU_DOMINIO].azurewebsites.net/api/[ENDPOINT_2]?code=[TU_CODE_2]';
+
+// IDs de carpetas de Google Drive para cada planta
+const ID_CARPETA_PLANTA_1 = '[ID_CARPETA_PLANTA_1]';
+const ID_CARPETA_PLANTA_2 = '[ID_CARPETA_PLANTA_2]';
+
+// ============================================================
+// CONFIGURACIÓN DE EMAILS POR PLANTA
+// ============================================================
+const CONFIG_EMAILS = {
+  PLANTA_1: {
+    destinatarios: [
+      '[EMAIL_DESTINATARIO_1]',
+      '[EMAIL_DESTINATARIO_2]'
+    ],
+    cc: ['[EMAIL_CC_1]'],
+    asunto: 'Reporte de Control - Planta 1',
+    nombrePlanta: 'Nombre de la Planta 1'
+  },
+  PLANTA_2: {
+    destinatarios: [
+      '[EMAIL_DESTINATARIO_3]',
+      '[EMAIL_DESTINATARIO_4]'
+    ],
+    cc: ['[EMAIL_CC_2]'],
+    asunto: 'Reporte de Control - Planta 2',
+    nombrePlanta: 'Nombre de la Planta 2'
+  }
+};
+
+// ============================================================
+// FUNCIONES PRINCIPALES
+// ============================================================
+
+/**
+ * Función requerida para ejecutar como aplicación web
+ * Sirve la interfaz HTML cuando se accede por URL
+ */
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('Interfaz')
+    .setTitle('Generador de Reportes - Sistema de Control')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * Crea un menú personalizado al abrir el documento
+ */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Reportes Azure/Drive')
+    .addItem('Generar Reporte', 'mostrarInterfaz')
+    .addToUi();
+}
+
+/**
+ * Muestra la interfaz de usuario HTML en sidebar (desde Sheets)
+ */
+function mostrarInterfaz() {
+  const html = HtmlService.createHtmlOutputFromFile('Interfaz')
+    .setWidth(450)
+    .setTitle('Generador de Reportes');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/**
+ * Ejecuta el flujo completo de generación de reporte
+ * @param {string} plantaSeleccionada - Clave de la planta (ej: 'PLANTA_1' o 'PLANTA_2')
+ * @returns {string|object} URL de descarga o objeto de error
+ */
+function ejecutarFlujoReporte(plantaSeleccionada) {
+  try {
+    // Validar entrada
+    if (!plantaSeleccionada || !CONFIG_EMAILS[plantaSeleccionada]) {
+      throw new Error('Planta no válida. Debe ser una clave configurada en CONFIG_EMAILS.');
+    }
+
+    const payload = JSON.stringify({ planta: plantaSeleccionada });
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: payload,
+      muteHttpExceptions: true
+    };
+
+    // ========================================
+    // PASO 1: Procesamiento (Azure Function 1)
+    // ========================================
+    Logger.log('Iniciando Paso 1: Compilando datos para planta ' + plantaSeleccionada);
+    
+    const response1 = UrlFetchApp.fetch(URL_AZURE_FUNCTION_1, options);
+    const responseCode1 = response1.getResponseCode();
+    const responseBody1 = response1.getContentText();
+
+    if (responseCode1 !== 200 && responseCode1 !== 201) {
+      throw new Error('Error en Paso 1 (Procesamiento). Código: ' + responseCode1 + '. Respuesta: ' + responseBody1);
+    }
+
+    Logger.log('Paso 1 completado exitosamente.');
+
+    // ========================================
+    // PASO 2: Generación (Azure Function 2)
+    // ========================================
+    Logger.log('Iniciando Paso 2: Generación de archivo reporte');
+    
+    const response2 = UrlFetchApp.fetch(URL_AZURE_FUNCTION_2, options);
+    const responseCode2 = response2.getResponseCode();
+    const responseBody2 = response2.getContentText();
+
+    if (responseCode2 !== 200 && responseCode2 !== 201) {
+      throw new Error('Error en Paso 2 (Generación). Código: ' + responseCode2 + '. Respuesta: ' + responseBody2);
+    }
+
+    Logger.log('Paso 2 completado exitosamente.');
+
+    // ========================================
+    // PASO 3: Búsqueda en Google Drive
+    // ========================================
+    Logger.log('Iniciando Paso 3: Búsqueda en Google Drive');
+    
+    // Determinar carpeta según planta
+    const carpetasMap = {
+      'PLANTA_1': ID_CARPETA_PLANTA_1,
+      'PLANTA_2': ID_CARPETA_PLANTA_2
+    };
+    
+    const idCarpeta = carpetasMap[plantaSeleccionada];
+    
+    // Validar que la carpeta existe
+    let carpeta;
+    try {
+      carpeta = DriveApp.getFolderById(idCarpeta);
+    } catch (e) {
+      throw new Error('No se pudo acceder a la carpeta de Drive. Verifica el ID_CARPETA para ' + plantaSeleccionada);
+    }
+
+    // Buscar archivo con patrón de nombre específico
+    const nombreBuscado = 'reporte_' + plantaSeleccionada.toLowerCase() + '.html';
+    const archivos = carpeta.getFilesByName(nombreBuscado);
+    
+    // Si no hay archivos con nombre exacto, buscar por patrón
+    let archivo = null;
+    if (archivos.hasNext()) {
+      archivo = archivos.next();
+    } else {
+      // Búsqueda alternativa por inicio de nombre
+      const todosArchivos = carpeta.getFiles();
+      const archivosEncontrados = [];
+      
+      while (todosArchivos.hasNext()) {
+        const file = todosArchivos.next();
+        if (file.getName().indexOf(nombreBuscado) === 0) {
+          archivosEncontrados.push(file);
+        }
+      }
+      
+      if (archivosEncontrados.length === 0) {
+        throw new Error('Archivo no encontrado en Drive. Se buscó: ' + nombreBuscado + '*');
+      }
+      
+      // Obtener el más reciente
+      archivosEncontrados.sort(function(a, b) {
+        return b.getLastUpdated().getTime() - a.getLastUpdated().getTime();
+      });
+      
+      archivo = archivosEncontrados[0];
+    }
+
+    // ========================================
+    // PASO 4: ENVIAR EMAIL CON REPORTE ADJUNTO
+    // ========================================
+    Logger.log('Iniciando Paso 4: Envío de email');
+    
+    try {
+      enviarReportePorEmail(archivo, plantaSeleccionada);
+      Logger.log('Email enviado exitosamente.');
+    } catch (emailError) {
+      Logger.log('Advertencia: Error al enviar email - ' + emailError.message);
+      // No interrumpimos el flujo, solo advertimos
+    }
+
+    // Generar URL de descarga
+    const fileId = archivo.getId();
+    const downloadUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
+    
+    Logger.log('Archivo encontrado: ' + archivo.getName());
+    Logger.log('URL generada: ' + downloadUrl);
+
+    return downloadUrl;
+
+  } catch (error) {
+    Logger.log('ERROR en ejecutarFlujoReporte: ' + error.message);
+    return { error: 'Error: ' + error.message };
+  }
+}
+
+// ============================================================
+// FUNCIONES DE ENVÍO DE EMAIL
+// ============================================================
+
+/**
+ * Envía el reporte por email a los destinatarios configurados para la planta
+ * @param {GoogleAppsScript.Drive.File} archivo - Archivo de Drive a adjuntar
+ * @param {string} planta - Clave de la planta
+ */
+function enviarReportePorEmail(archivo, planta) {
+  try {
+    // Obtener configuración de email para esta planta
+    const config = CONFIG_EMAILS[planta];
+    
+    if (!config) {
+      throw new Error('No hay configuración de email para la planta: ' + planta);
+    }
+
+    // Validar que hay destinatarios
+    if (!config.destinatarios || config.destinatarios.length === 0) {
+      throw new Error('No hay destinatarios configurados para la planta: ' + planta);
+    }
+
+    // Generar URL de descarga directa del archivo
+    const fileId = archivo.getId();
+    const downloadUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
+
+    // Generar cuerpo del email en HTML (con URL de descarga)
+    const cuerpoHTML = generarCuerpoEmail(archivo, config.nombrePlanta, downloadUrl);
+
+    // Preparar adjunto (intentar PDF, si falla usar formato original)
+    let adjunto;
+    try {
+      // Intentar convertir a PDF
+      adjunto = archivo.getAs(MimeType.PDF);
+    } catch (e) {
+      // Si no se puede convertir, usar el formato original
+      Logger.log('No se pudo convertir a PDF, usando formato original: ' + e.message);
+      adjunto = archivo.getBlob();
+    }
+
+    // Preparar opciones del email
+    const opciones = {
+      htmlBody: cuerpoHTML,
+      name: '[NOMBRE_SISTEMA]',
+      attachments: [adjunto],
+      cc: config.cc ? config.cc.join(',') : '',
+      noReply: false
+    };
+
+    // Enviar email a cada destinatario
+    const destinatariosString = config.destinatarios.join(',');
+    
+    MailApp.sendEmail(
+      destinatariosString,
+      config.asunto,
+      'Este es un email automático del Sistema de Reportes. Por favor, visualice el contenido en un cliente que soporte HTML.',
+      opciones
+    );
+
+    Logger.log('Email enviado exitosamente a: ' + destinatariosString);
+
+  } catch (error) {
+    Logger.log('Error al enviar email: ' + error.message);
+    throw error;
+  }
+}
+
+/**
+ * Genera el cuerpo del email en formato HTML
+ * @param {GoogleAppsScript.Drive.File} archivo - Archivo adjunto
+ * @param {string} nombrePlanta - Nombre completo de la planta
+ * @param {string} downloadUrl - URL de descarga directa del archivo
+ * @returns {string} HTML del cuerpo del email
+ */
+function generarCuerpoEmail(archivo, nombrePlanta, downloadUrl) {
+  const fechaGeneracion = Utilities.formatDate(
+    archivo.getLastUpdated(), 
+    Session.getScriptTimeZone(), 
+    'dd/MM/yyyy HH:mm:ss'
+  );
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <style>
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          max-width: 600px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        .header {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          padding: 30px;
+          border-radius: 10px 10px 0 0;
+          text-align: center;
+        }
+        .header h1 {
+          margin: 0;
+          font-size: 24px;
+        }
+        .content {
+          background: #f7fafc;
+          padding: 30px;
+          border-radius: 0 0 10px 10px;
+          border: 1px solid #e2e8f0;
+          border-top: none;
+        }
+        .info-box {
+          background: white;
+          padding: 20px;
+          border-radius: 8px;
+          margin: 20px 0;
+          border-left: 4px solid #667eea;
+        }
+        .info-row {
+          display: flex;
+          justify-content: space-between;
+          padding: 8px 0;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .info-row:last-child {
+          border-bottom: none;
+        }
+        .label {
+          font-weight: 600;
+          color: #4a5568;
+        }
+        .value {
+          color: #2d3748;
+        }
+        .footer {
+          text-align: center;
+          margin-top: 30px;
+          padding-top: 20px;
+          border-top: 2px solid #e2e8f0;
+          color: #718096;
+          font-size: 12px;
+        }
+        .btn {
+          display: inline-block;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          padding: 12px 30px;
+          text-decoration: none;
+          border-radius: 6px;
+          margin: 20px 0;
+          font-weight: 600;
+        }
+        .alert {
+          background: #edf2f7;
+          border-left: 4px solid #3182ce;
+          padding: 15px;
+          margin: 20px 0;
+          border-radius: 4px;
+        }
+        .security-note {
+          background: #fef3c7;
+          border-left: 4px solid #f59e0b;
+          padding: 12px;
+          margin: 20px 0;
+          border-radius: 4px;
+          font-size: 13px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>📊 Reporte Generado</h1>
+        <p style="margin: 10px 0 0 0; opacity: 0.9;">Sistema de Control Automático</p>
+      </div>
+      
+      <div class="content">
+        <p>Estimado/a,</p>
+        
+        <p>Se ha generado un nuevo reporte para la planta <strong>${nombrePlanta}</strong>.</p>
+        
+        <div class="info-box">
+          <div class="info-row">
+            <span class="label">📍 Planta:</span>
+            <span class="value">${nombrePlanta}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">📅 Fecha de generación:</span>
+            <span class="value">${fechaGeneracion}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">📎 Archivo adjunto:</span>
+            <span class="value">${archivo.getName()}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">📏 Tamaño:</span>
+            <span class="value">${formatearTamano(archivo.getSize())}</span>
+          </div>
+        </div>
+
+        <div class="alert">
+          <strong>ℹ️ Nota:</strong> El reporte se encuentra adjunto a este correo electrónico. Puede descargarlo directamente desde el botón a continuación o desde los archivos adjuntos del email.
+        </div>
+
+        <p style="margin-top: 25px; text-align: center;">
+          <a href="${downloadUrl}" class="btn" download>
+            📥 Descargar Reporte
+          </a>
+        </p>
+
+        <div class="security-note">
+          <strong>🔒 Información Confidencial:</strong> Este reporte contiene información confidencial. Por favor, no lo comparta con personas no autorizadas y elimínelo después de su revisión.
+        </div>
+
+        <p style="margin-top: 30px; font-size: 14px; color: #718096;">
+          Si tiene alguna pregunta o necesita asistencia, por favor contactenos.
+        </p>
+      </div>
+
+      <div class="footer">
+        <p><strong>[NOMBRE_ORGANIZACION] - Sistema de Control</strong></p>
+        <p>Este es un correo automático, por favor no responder directamente.</p>
+        <p style="margin-top: 10px; font-size: 11px;">
+          © ${new Date().getFullYear()} [NOMBRE_ORGANIZACION]. Todos los derechos reservados.
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return html;
+}
+
+/**
+ * Formatea el tamaño del archivo en formato legible
+ * @param {number} bytes - Tamaño en bytes
+ * @returns {string} Tamaño formateado (ej: "1.5 MB")
+ */
+function formatearTamano(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  
+  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+}
+
+// ============================================================
+// FUNCIÓN DE PRUEBA DE EMAIL (para testing)
+// ============================================================
+
+/**
+ * Función de prueba para enviar un email de prueba
+ * Ejecutar desde el editor de scripts para probar la configuración
+ * Modifica la planta a utilizar según sea necesario
+ */
+function probarEnvioEmail() {
+  try {
+    // Buscar un archivo de ejemplo en la carpeta de la primera planta
+    const carpeta = DriveApp.getFolderById(ID_CARPETA_PLANTA_1);
+    const archivos = carpeta.getFiles();
+    
+    if (!archivos.hasNext()) {
+      Logger.log('No hay archivos en la carpeta para probar');
+      return;
+    }
+    
+    const archivoEjemplo = archivos.next();
+    Logger.log('Enviando email de prueba con archivo: ' + archivoEjemplo.getName());
+    
+    enviarReportePorEmail(archivoEjemplo, 'PLANTA_1');
+    
+    Logger.log('✅ Email de prueba enviado exitosamente');
+    
+  } catch (error) {
+    Logger.log('❌ Error en prueba de email: ' + error.message);
+  }
+}
+
+/**
+ * Función auxiliar para obtener URL de vista previa (alternativa)
+ * @param {string} plantaSeleccionada - Clave de la planta
+ * @returns {string|object} URL de vista previa o objeto de error
+ */
+function obtenerUrlVistaPrevia(plantaSeleccionada) {
+  try {
+    const carpetasMap = {
+      'PLANTA_1': ID_CARPETA_PLANTA_1,
+      'PLANTA_2': ID_CARPETA_PLANTA_2
+    };
+    
+    const idCarpeta = carpetasMap[plantaSeleccionada];
+    const carpeta = DriveApp.getFolderById(idCarpeta);
+    const nombreBuscado = 'reporte_' + plantaSeleccionada.toLowerCase();
+    
+    const archivos = carpeta.getFiles();
+    while (archivos.hasNext()) {
+      const archivo = archivos.next();
+      if (archivo.getName().indexOf(nombreBuscado) === 0) {
+        return archivo.getUrl(); // URL de vista previa
+      }
+    }
+    
+    throw new Error('Archivo no encontrado');
+  } catch (error) {
+    return { error: error.message };
+  }
+}

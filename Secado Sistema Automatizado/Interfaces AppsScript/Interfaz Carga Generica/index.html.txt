@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Carga de Datos</title>
+  <?!= include('styles'); ?>
+</head>
+<body>
+  <div class="container">
+    <h1 class="title">Carga de datos – Planta <span id="plantName">...</span></h1>
+    
+    <div class="form-container">
+      
+      <!-- Selector de Modo -->
+      <div class="form-group">
+        <label>Modo de carga:</label>
+        <div class="radio-group">
+          <label class="radio-label">
+            <input type="radio" name="uploadMode" value="single" checked onchange="toggleUploadMode()">
+            <span>Secadora única</span>
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="uploadMode" value="multiple" onchange="toggleUploadMode()">
+            <span>Múltiples secadoras</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- MODO SIMPLE -->
+      <div id="singleMode" class="upload-mode">
+        <div class="form-group">
+          <label for="secadora">Secadora:</label>
+          <select id="secadora" class="form-control">
+            <option value="">-- Seleccione una secadora --</option>
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="fileInput">Archivos:</label>
+          <input type="file" id="fileInput" multiple class="form-control">
+          <small class="help-text">Puede seleccionar múltiples archivos para esta secadora</small>
+        </div>
+      </div>
+
+      <!-- MODO MÚLTIPLE -->
+      <div id="multipleMode" class="upload-mode" style="display: none;">
+        <div class="info-box">
+          <strong>💡 Modo múltiples secadoras:</strong>
+          <p>Agregue archivos para cada secadora y súbalos todos de una vez. Los archivos se procesarán secuencialmente.</p>
+        </div>
+
+        <div id="secadorasContainer"></div>
+
+        <div class="summary-box" id="summaryBox" style="display: none;">
+          <strong>📊 Resumen de carga:</strong>
+          <div id="summaryContent"></div>
+        </div>
+      </div>
+      
+      <!-- Botón de envío -->
+      <button id="uploadBtn" class="btn-primary" onclick="handleUpload()">
+        <span id="uploadBtnText">Subir Archivos</span>
+      </button>
+      
+      <!-- Área de mensajes -->
+      <div id="messageArea" class="message-area"></div>
+      
+      <!-- Progreso de carga -->
+      <div id="progressContainer" class="progress-container" style="display: none;">
+        <div class="progress-bar">
+          <div id="progressBar" class="progress-fill"></div>
+        </div>
+        <p id="progressText" class="progress-text">Procesando archivos...</p>
+      </div>
+      
+    </div>
+  </div>
+  
+  <script>
+    <?!= include('client'); ?>
+  </script>
+</body>
+</html>

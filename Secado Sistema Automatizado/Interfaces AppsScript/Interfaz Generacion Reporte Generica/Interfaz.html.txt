@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: url('https://eos.com/wp-content/uploads/2023/04/rice-field.jpg') center/cover no-repeat fixed;
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 0;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      padding: 40px;
+      width: 100%;
+      max-width: 450px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .title {
+      font-size: 24px;
+      font-weight: 700;
+      color: #2d3748;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+
+    .highlight {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      font-weight: 800;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #718096;
+      font-size: 14px;
+      margin-bottom: 30px;
+    }
+
+    .form-section {
+      margin-bottom: 25px;
+    }
+
+    .label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #4a5568;
+      margin-bottom: 10px;
+      letter-spacing: 0.5px;
+    }
+
+    .select-custom {
+      width: 100%;
+      padding: 14px 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 15px;
+      color: #2d3748;
+      background-color: #f7fafc;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%234a5568' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 16px center;
+      padding-right: 40px;
+    }
+
+    .select-custom:hover {
+      border-color: #667eea;
+      background-color: white;
+    }
+
+    .select-custom:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+      background-color: white;
+    }
+
+    .btn-submit {
+      width: 100%;
+      padding: 16px 24px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .btn-submit:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(102, 126, 234, 0.5);
+    }
+
+    .btn-submit:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    .btn-disabled {
+      opacity: 0.7;
+      cursor: not-allowed !important;
+    }
+
+    .progress-section {
+      margin-top: 25px;
+      padding: 20px;
+      background: #f7fafc;
+      border-radius: 10px;
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 10px;
+      background-color: #e2e8f0;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 15px;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+      width: 0%;
+      transition: width 0.5s ease;
+      border-radius: 10px;
+      position: relative;
+    }
+
+    .progress-bar-fill::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      animation: shimmer 2s infinite;
+    }
+
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    .progress-message {
+      text-align: center;
+      font-size: 14px;
+      color: #4a5568;
+      font-weight: 500;
+    }
+
+    .mensaje-resultado {
+      margin-top: 20px;
+      padding: 16px 20px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      animation: fadeIn 0.3s ease;
+      text-align: center;
+    }
+
+    .mensaje-success {
+      background-color: #c6f6d5;
+      color: #22543d;
+      border: 2px solid #9ae6b4;
+    }
+
+    .mensaje-error {
+      background-color: #fed7d7;
+      color: #742a2a;
+      border: 2px solid #fc8181;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .info-badge {
+      display: inline-block;
+      background: #edf2f7;
+      color: #4a5568;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      margin-top: 20px;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    .email-icon {
+      display: inline-block;
+      margin-right: 6px;
+    }
+
+    @media (max-width: 480px) {
+      .card {
+        padding: 30px 20px;
+      }
+
+      .title {
+        font-size: 20px;
+      }
+
+      .btn-submit {
+        font-size: 14px;
+        padding: 14px 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 class="title">Generación de Reporte - <span class="highlight" id="plantaTitle">Planta</span></h1>
+    <p class="subtitle">Sistema Latitud - Secado de Arroz</p>
+    
+    <div class="form-section">
+      <label class="label">SELECCIONE LA PLANTA:</label>
+      <select id="plantaSelect" class="select-custom" onchange="actualizarTitulo()">
+        <option value="">-- Seleccione una planta --</option>
+        <option value="JPV">JPV - Jose Pedro Varela</option>
+        <option value="RB">RB - Rio Branco</option>
+      </select>
+    </div>
+
+    <button id="btnGenerar" class="btn-submit" onclick="generarReporte()">
+      GENERAR REPORTE
+    </button>
+
+    <div class="info-badge">
+      <span class="email-icon">📧</span>
+      El reporte se enviará automáticamente por email
+    </div>
+
+    <div id="progressContainer" class="progress-section" style="display: none;">
+      <div class="progress-bar-bg">
+        <div id="progressBar" class="progress-bar-fill"></div>
+      </div>
+      <p id="progressMessage" class="progress-message">Iniciando proceso...</p>
+    </div>
+
+    <div id="mensajeResultado" class="mensaje-resultado" style="display: none;"></div>
+  </div>
+
+  <script>
+    let procesando = false;
+
+    function actualizarTitulo() {
+      const select = document.getElementById('plantaSelect');
+      const plantaTitle = document.getElementById('plantaTitle');
+      
+      if (select.value === 'JPV') {
+        plantaTitle.textContent = 'JPV';
+      } else if (select.value === 'RB') {
+        plantaTitle.textContent = 'RB';
+      } else {
+        plantaTitle.textContent = 'Planta';
+      }
+    }
+
+    function generarReporte() {
+      if (procesando) return;
+
+      const select = document.getElementById('plantaSelect');
+      const planta = select.value;
+
+      if (!planta) {
+        mostrarMensaje('⚠️ Por favor, seleccione una planta', 'error');
+        return;
+      }
+
+      procesando = true;
+      deshabilitarUI(true);
+      ocultarMensaje();
+      mostrarProgreso(0, 'Iniciando proceso...');
+
+      setTimeout(() => {
+        actualizarProgreso(25, 'Ejecutando procesamiento en Azure...');
+        
+        google.script.run
+          .withSuccessHandler(function(resultado) {
+            manejarExito(resultado, planta);
+          })
+          .withFailureHandler(function(error) {
+            manejarError(error);
+          })
+          .ejecutarFlujoReporte(planta);
+      }, 300);
+    }
+
+    function manejarExito(resultado, planta) {
+      if (resultado && resultado.error) {
+        mostrarMensaje('❌ ' + resultado.error, 'error');
+        resetearUI();
+        return;
+      }
+
+      actualizarProgreso(50, 'Generando reporte en Azure...');
+
+      setTimeout(() => {
+        actualizarProgreso(75, 'Enviando reporte por email...');
+
+        setTimeout(() => {
+          actualizarProgreso(100, 'Proceso completado exitosamente');
+
+          setTimeout(() => {
+            mostrarMensaje(
+              '✅ Reporte de planta ' + planta + ' generado y enviado por email. Descargando...', 
+              'success'
+            );
+            
+            if (resultado && typeof resultado === 'string') {
+              window.open(resultado, '_blank');
+            }
+
+            setTimeout(() => {
+              resetearUI();
+            }, 4000);
+          }, 500);
+        }, 800);
+      }, 800);
+    }
+
+    function manejarError(error) {
+      console.error('Error:', error);
+      let mensaje = '❌ Error al generar el reporte';
+      if (error && error.message) {
+        mensaje += ': ' + error.message;
+      }
+      mostrarMensaje(mensaje, 'error');
+      resetearUI();
+    }
+
+    function mostrarProgreso(porcentaje, mensaje) {
+      const container = document.getElementById('progressContainer');
+      container.style.display = 'block';
+      actualizarProgreso(porcentaje, mensaje);
+    }
+
+    function actualizarProgreso(porcentaje, mensaje) {
+      const bar = document.getElementById('progressBar');
+      const messageEl = document.getElementById('progressMessage');
+      bar.style.width = porcentaje + '%';
+      messageEl.textContent = mensaje;
+    }
+
+    function ocultarProgreso() {
+      const container = document.getElementById('progressContainer');
+      container.style.display = 'none';
+    }
+
+    function mostrarMensaje(texto, tipo) {
+      const mensaje = document.getElementById('mensajeResultado');
+      mensaje.textContent = texto;
+      mensaje.className = 'mensaje-resultado mensaje-' + tipo;
+      mensaje.style.display = 'block';
+    }
+
+    function ocultarMensaje() {
+      const mensaje = document.getElementById('mensajeResultado');
+      mensaje.style.display = 'none';
+    }
+
+    function deshabilitarUI(deshabilitar) {
+      const select = document.getElementById('plantaSelect');
+      const btn = document.getElementById('btnGenerar');
+      
+      select.disabled = deshabilitar;
+      btn.disabled = deshabilitar;
+      
+      if (deshabilitar) {
+        btn.textContent = 'PROCESANDO...';
+        btn.classList.add('btn-disabled');
+      } else {
+        btn.textContent = 'GENERAR REPORTE';
+        btn.classList.remove('btn-disabled');
+      }
+    }
+
+    function resetearUI() {
+      procesando = false;
+      deshabilitarUI(false);
+      setTimeout(() => {
+        ocultarProgreso();
+      }, 500);
+    }
+  </script>
+</body>
+</html>

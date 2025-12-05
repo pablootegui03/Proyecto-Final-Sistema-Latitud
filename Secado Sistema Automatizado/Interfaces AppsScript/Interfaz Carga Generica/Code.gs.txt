@@ -1,0 +1,425 @@
+/**
+ * ========================================================================
+ * SISTEMA DE CARGA DE DATOS - GENÉRICO
+ * Versión: 2.0 (Producción)
+ * ========================================================================
+ * 
+ * Sistema de carga secuencial de archivos de sensores a Google Drive
+ * con procesamiento automático mediante Azure Functions.
+ * 
+ * Características:
+ * - Carga secuencial con confirmación de procesamiento
+ * - Soporte para una o múltiples secadoras/equipos
+ * - Integración con 2 Azure Functions (ETL + ML)
+ * - Sistema de timestamps para evitar duplicados
+ * 
+ * ========================================================================
+ */
+
+// ========================================================================
+// CONFIGURACIÓN CENTRAL
+// ========================================================================
+
+/**
+ * IDs de carpetas de Google Drive por secadora/equipo
+ * 
+ * IMPORTANTE: Modificar estos IDs según la configuración de Drive
+ * 
+ * PARA AGREGAR MÁS SECADORAS:
+ * 1. Crear una nueva carpeta en Google Drive
+ * 2. Obtener el ID de la carpeta (visible en la URL: /folders/[ID_AQUI])
+ * 3. Agregar una nueva línea en el objeto ROUTES:
+ *    "Secadora N": "[ID_CARPETA_N]",
+ * 
+ * Ejemplo:
+ *    "Secadora 7": "1abc123defXYZ789...",
+ *    "Secadora 8": "1xyz789abcDEF123...",
+ */
+const ROUTES = {
+  "[NOMBRE_SECADORA_1]": "[ID_CARPETA_1]",
+  "[NOMBRE_SECADORA_2]": "[ID_CARPETA_2]",
+  "[NOMBRE_SECADORA_3]": "[ID_CARPETA_3]",
+  "[NOMBRE_SECADORA_4]": "[ID_CARPETA_4]",
+  "[NOMBRE_SECADORA_5]": "[ID_CARPETA_5]",
+  "[NOMBRE_SECADORA_6]": "[ID_CARPETA_6]"
+};
+
+/**
+ * Identificador de planta/instalación
+ */
+const PLANT_NAME = "[NOMBRE_PLANTA]";
+
+/**
+ * URLs de Azure Functions
+ * 
+ * FORMATO:
+ * https://[TU_DOMINIO].azurewebsites.net/api/[ENDPOINT]?code=[TU_CODE]
+ */
+const AZURE_ETL_URL = "https://[TU_DOMINIO].azurewebsites.net/api/[ENDPOINT_ETL]?code=[TU_CODE_ETL]";
+const AZURE_ML_URL = "https://[TU_DOMINIO].azurewebsites.net/api/[ENDPOINT_ML]?code=[TU_CODE_ML]";
+
+// ========================================================================
+// FUNCIONES DE INTERFAZ WEB
+// ========================================================================
+
+/**
+ * Renderiza la interfaz web principal
+ */
+function doGet() {
+  return HtmlService.createTemplateFromFile('index')
+    .evaluate()
+    .setTitle('Carga de Datos - Planta ' + PLANT_NAME)
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * Incluye archivos HTML parciales (CSS, JS)
+ */
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/**
+ * Devuelve la lista de secadoras/equipos disponibles
+ */
+function getSecadoras() {
+  try {
+    return Object.keys(ROUTES);
+  } catch (error) {
+    throw new Error('Error al obtener secadoras: ' + error.message);
+  }
+}
+
+/**
+ * Devuelve el nombre de la planta configurada
+ */
+function getPlantName() {
+  return PLANT_NAME;
+}
+
+// ========================================================================
+// FUNCIÓN PRINCIPAL DE CARGA
+// ========================================================================
+
+/**
+ * Sube un archivo a Google Drive y dispara el procesamiento ETL
+ * 
+ * @param {string} secadora - Nombre de la secadora/equipo
+ * @param {string} filename - Nombre del archivo
+ * @param {string} base64Data - Contenido en Base64
+ * @returns {object} Resultado de la operación
+ */
+function uploadFile(secadora, filename, base64Data) {
+  try {
+    // Validar secadora
+    if (!ROUTES[secadora]) {
+      throw new Error('Secadora no válida: ' + secadora);
+    }
+    
+    const folderId = ROUTES[secadora];
+    
+    // Validar que el ID no sea un placeholder
+    if (folderId.startsWith('[ID_CARPETA_') || folderId.startsWith('[NOMBRE_')) {
+      throw new Error('Configure el ID real de la carpeta para ' + secadora);
+    }
+    
+    // Obtener carpeta de destino
+    let folder;
+    try {
+      folder = DriveApp.getFolderById(folderId);
+    } catch (e) {
+      throw new Error('No se pudo acceder a la carpeta. Verifique el ID: ' + folderId);
+    }
+    
+    // Decodificar Base64 y crear archivo
+    const data = base64Data.split(',')[1];
+    const decoded = Utilities.base64Decode(data);
+    const blob = Utilities.newBlob(decoded, getMimeType(filename), filename);
+    
+    // Guardar archivo en Drive
+    const file = folder.createFile(blob);
+    file.setName(filename);
+    
+    // Preparar metadata para Azure ETL
+    const fileMetadata = {
+      fileId: file.getId(),
+      fileName: filename,
+      fileUrl: file.getUrl(),
+      driveUrl: file.getUrl(),
+      mimeType: file.getMimeType(),
+      size: file.getSize(),
+      secadora: secadora,
+      planta: PLANT_NAME,
+      uploadDate: new Date().toISOString(),
+      folderId: folderId,
+      modifiedTime: file.getLastUpdated().toISOString()
+    };
+    
+    Logger.log('[UPLOAD] Archivo guardado: ' + filename + ' (ID: ' + file.getId() + ')');
+    
+    // Disparar ETL en Azure
+    const azureResponse = triggerAzureETL(fileMetadata);
+    
+    return {
+      success: true,
+      message: 'Archivo subido correctamente: ' + filename,
+      fileId: file.getId(),
+      fileUrl: file.getUrl(),
+      azureTrigger: azureResponse
+    };
+    
+  } catch (error) {
+    Logger.log('[UPLOAD ERROR] ' + error.message);
+    return {
+      success: false,
+      message: 'Error al subir archivo: ' + error.message
+    };
+  }
+}
+
+// ========================================================================
+// INTEGRACIÓN CON AZURE FUNCTIONS
+// ========================================================================
+
+/**
+ * Dispara la Azure Function de ETL
+ * 
+ * @param {object} fileMetadata - Metadata del archivo subido
+ * @returns {object} Respuesta de Azure
+ */
+function triggerAzureETL(fileMetadata) {
+  try {
+    Logger.log('[AZURE ETL] Iniciando trigger');
+    
+    // Validar URL configurada
+    if (!AZURE_ETL_URL || 
+        AZURE_ETL_URL === "" || 
+        AZURE_ETL_URL.includes("[TU_")) {
+      throw new Error('AZURE_ETL_URL no está configurada correctamente');
+    }
+    
+    // Configurar request
+    const options = {
+      method: 'post',
+      headers: { 'Content-Type': 'application/json' },
+      payload: JSON.stringify(fileMetadata),
+      muteHttpExceptions: true
+    };
+    
+    // Hacer POST
+    const response = UrlFetchApp.fetch(AZURE_ETL_URL, options);
+    const responseCode = response.getResponseCode();
+    const responseBody = response.getContentText();
+    
+    Logger.log('[AZURE ETL] Status: ' + responseCode);
+    
+    // Verificar respuesta
+    if (responseCode >= 200 && responseCode < 300) {
+      Logger.log('[AZURE ETL] ✓ Completado');
+      return {
+        success: true,
+        statusCode: responseCode,
+        message: 'ETL completado',
+        response: responseBody
+      };
+    } else {
+      Logger.log('[AZURE ETL] ✗ Error (Status: ' + responseCode + ')');
+      return {
+        success: false,
+        statusCode: responseCode,
+        message: 'Error en ETL',
+        response: responseBody
+      };
+    }
+    
+  } catch (error) {
+    Logger.log('[AZURE ETL ERROR] ' + error.message);
+    return {
+      success: false,
+      message: 'Error conectando con Azure ETL: ' + error.message,
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Dispara la Azure Function de ML
+ * 
+ * @param {object} metadata - Metadata simplificada
+ * @returns {object} Respuesta de Azure
+ */
+function triggerSecondAzureFunction(metadata) {
+  try {
+    Logger.log('[AZURE ML] Iniciando trigger');
+    Logger.log('[AZURE ML] Planta: ' + metadata.planta + ', Archivo: ' + metadata.archivo);
+    
+    // Validar URL configurada
+    if (!AZURE_ML_URL || 
+        AZURE_ML_URL === "" || 
+        AZURE_ML_URL.includes("[TU_")) {
+      Logger.log('[AZURE ML] ⏭️ No configurada, saltando');
+      return {
+        success: false,
+        message: 'Segunda función no configurada',
+        skipped: true
+      };
+    }
+    
+    // Configurar request
+    const options = {
+      method: 'post',
+      headers: { 'Content-Type': 'application/json' },
+      payload: JSON.stringify(metadata),
+      muteHttpExceptions: true
+    };
+    
+    // Hacer POST
+    const response = UrlFetchApp.fetch(AZURE_ML_URL, options);
+    const responseCode = response.getResponseCode();
+    const responseBody = response.getContentText();
+    
+    Logger.log('[AZURE ML] Status: ' + responseCode);
+    
+    // Verificar respuesta
+    if (responseCode >= 200 && responseCode < 300) {
+      Logger.log('[AZURE ML] ✓ Completado');
+      return {
+        success: true,
+        statusCode: responseCode,
+        message: 'ML completado',
+        response: responseBody
+      };
+    } else {
+      Logger.log('[AZURE ML] ✗ Error (Status: ' + responseCode + ')');
+      return {
+        success: false,
+        statusCode: responseCode,
+        message: 'Error en ML',
+        response: responseBody
+      };
+    }
+    
+  } catch (error) {
+    Logger.log('[AZURE ML ERROR] ' + error.message);
+    return {
+      success: false,
+      message: 'Error conectando con Azure ML: ' + error.message,
+      error: error.toString()
+    };
+  }
+}
+
+// ========================================================================
+// FUNCIONES AUXILIARES
+// ========================================================================
+
+/**
+ * Obtiene el MIME type según la extensión del archivo
+ */
+function getMimeType(filename) {
+  const extension = filename.split('.').pop().toLowerCase();
+  const mimeTypes = {
+    'pdf': 'application/pdf',
+    'doc': 'application/msword',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls': 'application/vnd.ms-excel',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'csv': 'text/csv',
+    'txt': 'text/plain',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'zip': 'application/zip',
+    'rar': 'application/x-rar-compressed'
+  };
+  
+  return mimeTypes[extension] || 'application/octet-stream';
+}
+
+// ========================================================================
+// FUNCIONES DE PRUEBA
+// ========================================================================
+
+/**
+ * Prueba la conexión con Azure ETL
+ * Ejecutar manualmente desde el editor
+ */
+function testAzureETL() {
+  Logger.log('=== PRUEBA AZURE ETL ===');
+  Logger.log('Planta configurada: ' + PLANT_NAME);
+  Logger.log('URL: ' + AZURE_ETL_URL);
+  
+  const testMetadata = {
+    fileId: "TEST_FILE_ID",
+    fileName: "test.xlsx",
+    secadora: "[NOMBRE_SECADORA_1]",
+    planta: PLANT_NAME,
+    folderId: "[ID_CARPETA_1]",
+    uploadDate: new Date().toISOString()
+  };
+  
+  Logger.log('Metadata: ' + JSON.stringify(testMetadata, null, 2));
+  
+  const result = triggerAzureETL(testMetadata);
+  
+  Logger.log('Resultado: ' + JSON.stringify(result, null, 2));
+  
+  if (result.success) {
+    Logger.log('✅ CONEXIÓN EXITOSA');
+  } else {
+    Logger.log('❌ CONEXIÓN FALLIDA');
+  }
+  
+  return result;
+}
+
+/**
+ * Prueba la conexión con Azure ML
+ * Ejecutar manualmente desde el editor
+ */
+function testAzureML() {
+  Logger.log('=== PRUEBA AZURE ML ===');
+  Logger.log('Planta configurada: ' + PLANT_NAME);
+  Logger.log('URL: ' + AZURE_ML_URL);
+  
+  const testMetadata = {
+    planta: PLANT_NAME,
+    archivo: "SENSOR20_processed_20251126T194042Z.csv"
+  };
+  
+  Logger.log('Metadata: ' + JSON.stringify(testMetadata, null, 2));
+  
+  const result = triggerSecondAzureFunction(testMetadata);
+  
+  Logger.log('Resultado: ' + JSON.stringify(result, null, 2));
+  
+  if (result.success) {
+    Logger.log('✅ CONEXIÓN EXITOSA');
+  } else if (result.skipped) {
+    Logger.log('⏭️ NO CONFIGURADA');
+  } else {
+    Logger.log('❌ CONEXIÓN FALLIDA');
+  }
+  
+  return result;
+}
+
+/**
+ * Devuelve la lista de secadoras configuradas
+ * Útil para depuración y verificación de configuración
+ */
+function listarSecadorasConfiguradas() {
+  Logger.log('=== SECADORAS CONFIGURADAS ===');
+  Logger.log('Planta: ' + PLANT_NAME);
+  Logger.log('Total de secadoras: ' + Object.keys(ROUTES).length);
+  Logger.log('');
+  
+  let i = 1;
+  for (const [secadora, carpetaId] of Object.entries(ROUTES)) {
+    Logger.log(i + '. ' + secadora + ' -> ' + carpetaId);
+    i++;
+  }
+  
+  return ROUTES;
+}

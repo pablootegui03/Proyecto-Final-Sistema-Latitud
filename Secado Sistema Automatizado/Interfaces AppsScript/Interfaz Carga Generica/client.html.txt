@@ -1,0 +1,504 @@
+/**
+ * ========================================================================
+ * CLIENTE WEB - SISTEMA DE CARGA SECUENCIAL
+ * Versión: 2.0 (Producción)
+ * ========================================================================
+ * 
+ * Maneja la interfaz de usuario y la lógica de carga secuencial de archivos.
+ * 
+ * Características:
+ * - Carga secuencial con confirmación de procesamiento
+ * - Soporte para modo simple (una secadora) y múltiple (varias secadoras)
+ * - Integración con 2 Azure Functions (ETL + ML)
+ * - Feedback visual detallado del progreso
+ * 
+ * ========================================================================
+ */
+
+// ========================================================================
+// ESTADO GLOBAL
+// ========================================================================
+
+let secadorasData = {};
+let allSecadoras = [];
+
+// Control de cola secuencial
+let uploadQueue = [];
+let isUploading = false;
+let currentUploadIndex = 0;
+let totalUploads = 0;
+let successCount = 0;
+let errorCount = 0;
+
+// ========================================================================
+// INICIALIZACIÓN
+// ========================================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+  loadPlantName();
+  loadSecadoras();
+});
+
+function loadPlantName() {
+  google.script.run
+    .withSuccessHandler(function(plantName) {
+      document.getElementById('plantName').textContent = plantName;
+    })
+    .withFailureHandler(function(error) {
+      console.error('Error al cargar nombre de planta:', error);
+      document.getElementById('plantName').textContent = '---';
+    })
+    .getPlantName();
+}
+
+function loadSecadoras() {
+  google.script.run
+    .withSuccessHandler(function(secadoras) {
+      allSecadoras = secadoras;
+      
+      // Llenar dropdown modo simple
+      const select = document.getElementById('secadora');
+      select.innerHTML = '<option value="">-- Seleccione una secadora --</option>';
+      secadoras.forEach(function(secadora) {
+        const option = document.createElement('option');
+        option.value = secadora;
+        option.textContent = secadora;
+        select.appendChild(option);
+      });
+
+      // Crear cards modo múltiple
+      createMultipleSecadorasUI(secadoras);
+    })
+    .withFailureHandler(function(error) {
+      showMessage('Error al cargar secadoras: ' + error.message, 'error');
+    })
+    .getSecadoras();
+}
+
+// ========================================================================
+// UI - MODO MÚLTIPLE
+// ========================================================================
+
+function createMultipleSecadorasUI(secadoras) {
+  const container = document.getElementById('secadorasContainer');
+  container.innerHTML = '';
+
+  secadoras.forEach(function(secadora) {
+    const card = document.createElement('div');
+    card.className = 'secadora-card';
+    card.innerHTML = `
+      <div class="secadora-header">
+        <h3>${secadora}</h3>
+        <span class="file-count" id="count-${sanitizeId(secadora)}">0 archivos</span>
+      </div>
+      <div class="secadora-body">
+        <input 
+          type="file" 
+          id="files-${sanitizeId(secadora)}" 
+          multiple 
+          class="form-control"
+          onchange="updateSecadoraFiles('${secadora}')"
+        >
+        <div class="file-list" id="list-${sanitizeId(secadora)}"></div>
+      </div>
+    `;
+    container.appendChild(card);
+
+    secadorasData[secadora] = [];
+  });
+}
+
+function sanitizeId(secadora) {
+  return secadora.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+}
+
+function toggleUploadMode() {
+  const mode = document.querySelector('input[name="uploadMode"]:checked').value;
+  const singleMode = document.getElementById('singleMode');
+  const multipleMode = document.getElementById('multipleMode');
+  const uploadBtn = document.getElementById('uploadBtnText');
+
+  if (mode === 'single') {
+    singleMode.style.display = 'block';
+    multipleMode.style.display = 'none';
+    uploadBtn.textContent = 'Subir Archivos';
+  } else {
+    singleMode.style.display = 'none';
+    multipleMode.style.display = 'block';
+    uploadBtn.textContent = 'Subir Todos los Archivos';
+    updateSummary();
+  }
+
+  clearMessages();
+}
+
+function updateSecadoraFiles(secadora) {
+  const fileInput = document.getElementById('files-' + sanitizeId(secadora));
+  const fileList = document.getElementById('list-' + sanitizeId(secadora));
+  const fileCount = document.getElementById('count-' + sanitizeId(secadora));
+  
+  const files = Array.from(fileInput.files);
+  secadorasData[secadora] = files;
+
+  fileCount.textContent = files.length + ' archivo' + (files.length !== 1 ? 's' : '');
+
+  if (files.length > 0) {
+    fileList.innerHTML = '<ul class="file-names">' + 
+      files.map(f => '<li>' + f.name + ' (' + formatBytes(f.size) + ')</li>').join('') +
+      '</ul>';
+  } else {
+    fileList.innerHTML = '';
+  }
+
+  updateSummary();
+}
+
+function updateSummary() {
+  const summaryBox = document.getElementById('summaryBox');
+  const summaryContent = document.getElementById('summaryContent');
+  
+  let totalFiles = 0;
+  let totalSize = 0;
+  let secadorasWithFiles = [];
+
+  Object.keys(secadorasData).forEach(function(secadora) {
+    const files = secadorasData[secadora];
+    if (files.length > 0) {
+      totalFiles += files.length;
+      files.forEach(f => totalSize += f.size);
+      secadorasWithFiles.push(secadora + ': ' + files.length + ' archivo' + (files.length !== 1 ? 's' : ''));
+    }
+  });
+
+  if (totalFiles > 0) {
+    summaryBox.style.display = 'block';
+    summaryContent.innerHTML = `
+      <p><strong>${totalFiles}</strong> archivos en total (${formatBytes(totalSize)})</p>
+      <p><strong>${secadorasWithFiles.length}</strong> secadoras con archivos:</p>
+      <ul class="summary-list">
+        ${secadorasWithFiles.map(s => '<li>' + s + '</li>').join('')}
+      </ul>
+    `;
+  } else {
+    summaryBox.style.display = 'none';
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+}
+
+// ========================================================================
+// CARGA DE ARCHIVOS
+// ========================================================================
+
+function handleUpload() {
+  const mode = document.querySelector('input[name="uploadMode"]:checked').value;
+
+  if (mode === 'single') {
+    handleSingleUpload();
+  } else {
+    handleMultipleUpload();
+  }
+}
+
+function handleSingleUpload() {
+  const secadora = document.getElementById('secadora').value;
+  const fileInput = document.getElementById('fileInput');
+  const files = fileInput.files;
+  
+  if (!secadora) {
+    showMessage('Por favor seleccione una secadora', 'error');
+    return;
+  }
+  
+  if (files.length === 0) {
+    showMessage('Por favor seleccione al menos un archivo', 'error');
+    return;
+  }
+
+  uploadQueue = Array.from(files).map(file => ({
+    secadora: secadora,
+    file: file
+  }));
+
+  startSequentialUpload();
+}
+
+function handleMultipleUpload() {
+  uploadQueue = [];
+  
+  Object.keys(secadorasData).forEach(function(secadora) {
+    const files = secadorasData[secadora];
+    if (files.length > 0) {
+      files.forEach(file => {
+        uploadQueue.push({
+          secadora: secadora,
+          file: file
+        });
+      });
+    }
+  });
+
+  if (uploadQueue.length === 0) {
+    showMessage('Por favor agregue archivos a al menos una secadora', 'error');
+    return;
+  }
+
+  const secadorasCount = Object.keys(secadorasData).filter(s => secadorasData[s].length > 0).length;
+  const confirmMsg = `¿Desea subir ${uploadQueue.length} archivos de ${secadorasCount} secadoras?\n\nLos archivos se procesarán uno por uno de forma secuencial.`;
+  
+  if (!confirm(confirmMsg)) {
+    return;
+  }
+
+  startSequentialUpload();
+}
+
+// ========================================================================
+// PROCESAMIENTO SECUENCIAL
+// ========================================================================
+
+function startSequentialUpload() {
+  currentUploadIndex = 0;
+  totalUploads = uploadQueue.length;
+  successCount = 0;
+  errorCount = 0;
+  isUploading = true;
+
+  const uploadBtn = document.getElementById('uploadBtn');
+  uploadBtn.disabled = true;
+  uploadBtn.querySelector('#uploadBtnText').textContent = 'Procesando...';
+
+  showProgress(true);
+  clearMessages();
+
+  console.log(`🚀 Iniciando carga secuencial de ${totalUploads} archivos`);
+
+  processNextFile();
+}
+
+function processNextFile() {
+  if (currentUploadIndex >= uploadQueue.length) {
+    finishSequentialUpload();
+    return;
+  }
+
+  const item = uploadQueue[currentUploadIndex];
+  const { secadora, file } = item;
+  
+  updateProgress(currentUploadIndex, totalUploads);
+  
+  const progressText = `Procesando archivo ${currentUploadIndex + 1} de ${totalUploads}: ${file.name} (${secadora})`;
+  document.getElementById('progressText').textContent = progressText;
+  
+  console.log(`📤 [${currentUploadIndex + 1}/${totalUploads}] Subiendo: ${file.name} → ${secadora}`);
+
+  const reader = new FileReader();
+  
+  reader.onload = function(e) {
+    const base64Data = e.target.result;
+    
+    google.script.run
+      .withSuccessHandler(function(result) {
+        handleUploadSuccess(result, secadora, file.name);
+      })
+      .withFailureHandler(function(error) {
+        handleUploadError(error, secadora, file.name);
+      })
+      .uploadFile(secadora, file.name, base64Data);
+  };
+  
+  reader.onerror = function(error) {
+    console.error(`❌ Error leyendo archivo ${file.name}:`, error);
+    handleUploadError({ message: 'Error leyendo archivo' }, secadora, file.name);
+  };
+  
+  reader.readAsDataURL(file);
+}
+
+function handleUploadSuccess(result, secadora, fileName) {
+  if (result.success) {
+    console.log(`✅ [${currentUploadIndex + 1}/${totalUploads}] ETL completado: ${fileName}`);
+    showMessage(`✓ ${fileName} → ${secadora}: ETL procesado`, 'success');
+    
+    if (result.azureTrigger && result.azureTrigger.response) {
+      console.log(`   📊 Azure ETL Response:`, result.azureTrigger);
+      
+      try {
+        const azureResponse = JSON.parse(result.azureTrigger.response);
+        
+        if (azureResponse.success && azureResponse.processed_files && azureResponse.processed_files.length > 0) {
+          const processedFile = azureResponse.processed_files[0];
+          
+          console.log(`   📄 Archivo procesado: ${processedFile.processed_file}`);
+          
+          triggerSecondAzureFunction(azureResponse, processedFile, secadora, fileName);
+          return;
+        }
+      } catch (e) {
+        console.error(`   ❌ Error parseando respuesta:`, e);
+      }
+    }
+    
+    successCount++;
+    advanceToNextFile();
+  } else {
+    errorCount++;
+    console.error(`❌ [${currentUploadIndex + 1}/${totalUploads}] Fallo ETL: ${fileName}`, result.message);
+    showMessage(`✗ ${fileName} → ${secadora}: ${result.message}`, 'error');
+    advanceToNextFile();
+  }
+}
+
+function triggerSecondAzureFunction(etlResponse, processedFile, secadora, originalFileName) {
+  console.log(`🔄 [${currentUploadIndex + 1}/${totalUploads}] Disparando segunda función Azure`);
+  
+  document.getElementById('progressText').textContent = 
+    `ML ${currentUploadIndex + 1} de ${totalUploads}: ${originalFileName}`;
+  
+  const secondFunctionMetadata = {
+    planta: etlResponse.metadata.planta,
+    archivo: processedFile.processed_file
+  };
+  
+  console.log(`   📤 Metadata:`, secondFunctionMetadata);
+  
+  google.script.run
+    .withSuccessHandler(function(result) {
+      handleSecondFunctionSuccess(result, secadora, originalFileName);
+    })
+    .withFailureHandler(function(error) {
+      handleSecondFunctionError(error, secadora, originalFileName);
+    })
+    .triggerSecondAzureFunction(secondFunctionMetadata);
+}
+
+function handleSecondFunctionSuccess(result, secadora, fileName) {
+  if (result.success) {
+    successCount++;
+    console.log(`✅ [${currentUploadIndex + 1}/${totalUploads}] Procesamiento completo: ${fileName}`);
+    showMessage(`✓ ${fileName} → ${secadora}: Procesamiento completo`, 'success');
+  } else if (result.skipped) {
+    successCount++;
+    console.log(`⏭️ [${currentUploadIndex + 1}/${totalUploads}] Segunda función omitida: ${fileName}`);
+  } else {
+    errorCount++;
+    console.error(`❌ [${currentUploadIndex + 1}/${totalUploads}] Fallo ML: ${fileName}`, result.message);
+    showMessage(`✗ ${fileName} → ${secadora}: Error en ML`, 'warning');
+  }
+  
+  advanceToNextFile();
+}
+
+function handleSecondFunctionError(error, secadora, fileName) {
+  errorCount++;
+  console.error(`❌ [${currentUploadIndex + 1}/${totalUploads}] Error ML: ${fileName}`, error);
+  showMessage(`✗ ${fileName} → ${secadora}: Error en ML`, 'error');
+  
+  advanceToNextFile();
+}
+
+function handleUploadError(error, secadora, fileName) {
+  errorCount++;
+  console.error(`❌ [${currentUploadIndex + 1}/${totalUploads}] Error: ${fileName}`, error);
+  showMessage(`✗ ${fileName} → ${secadora}: Error - ${error.message}`, 'error');
+
+  currentUploadIndex++;
+  setTimeout(processNextFile, 2000);
+}
+
+function advanceToNextFile() {
+  currentUploadIndex++;
+  
+  setTimeout(function() {
+    processNextFile();
+  }, 2000);
+}
+
+function finishSequentialUpload() {
+  isUploading = false;
+  showProgress(false);
+  
+  const uploadBtn = document.getElementById('uploadBtn');
+  uploadBtn.disabled = false;
+  uploadBtn.querySelector('#uploadBtnText').textContent = 'Subir Archivos';
+
+  console.log(`\n📊 RESUMEN:`);
+  console.log(`   Total: ${totalUploads}`);
+  console.log(`   ✅ Exitosos: ${successCount}`);
+  console.log(`   ❌ Errores: ${errorCount}`);
+
+  if (errorCount === 0) {
+    showMessage(`✓ Carga completada: ${successCount} archivos procesados correctamente`, 'success');
+  } else if (successCount === 0) {
+    showMessage(`✗ Error: Ningún archivo pudo ser procesado (${errorCount} errores)`, 'error');
+  } else {
+    showMessage(`⚠ Carga completada con errores: ${successCount} exitosos, ${errorCount} fallidos`, 'warning');
+  }
+
+  const mode = document.querySelector('input[name="uploadMode"]:checked').value;
+  
+  if (mode === 'single') {
+    document.getElementById('fileInput').value = '';
+  } else {
+    Object.keys(secadorasData).forEach(function(secadora) {
+      const fileInput = document.getElementById('files-' + sanitizeId(secadora));
+      if (fileInput) fileInput.value = '';
+      secadorasData[secadora] = [];
+      
+      const fileCount = document.getElementById('count-' + sanitizeId(secadora));
+      const fileList = document.getElementById('list-' + sanitizeId(secadora));
+      if (fileCount) fileCount.textContent = '0 archivos';
+      if (fileList) fileList.innerHTML = '';
+    });
+    
+    updateSummary();
+  }
+
+  uploadQueue = [];
+}
+
+// ========================================================================
+// UI - FEEDBACK
+// ========================================================================
+
+function showProgress(show) {
+  const progressContainer = document.getElementById('progressContainer');
+  progressContainer.style.display = show ? 'block' : 'none';
+  
+  if (!show) {
+    document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('progressText').textContent = 'Procesando archivos...';
+  }
+}
+
+function updateProgress(current, total) {
+  const percentage = (current / total) * 100;
+  document.getElementById('progressBar').style.width = percentage + '%';
+}
+
+function showMessage(message, type) {
+  const messageArea = document.getElementById('messageArea');
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'message message-' + type;
+  messageDiv.textContent = message;
+  messageArea.appendChild(messageDiv);
+  
+  if (type === 'success') {
+    setTimeout(function() {
+      messageDiv.style.opacity = '0';
+      setTimeout(function() {
+        messageDiv.remove();
+      }, 300);
+    }, 8000);
+  }
+}
+
+function clearMessages() {
+  document.getElementById('messageArea').innerHTML = '';
+}
